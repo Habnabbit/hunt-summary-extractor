@@ -16,7 +16,7 @@ use std::time::Duration;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Path of the 'attributes.xml' file
+    /// Path of 'attributes.xml'
     #[arg(
         short,
         long,
@@ -24,19 +24,19 @@ struct Args {
     )]
     input: String,
 
-    /// Path of the output directory [default: ~/Documents/Hunt]
+    /// Path of output directory [default: ~/Documents/Hunt/MatchData]
     #[arg(short, long)]
     output_dir: Option<String>,
-
-    /// Zero-based number for teams and players
-    #[arg(short, long)]
-    zero_based: bool,
 
     /// Disable continuous mode, checking only once for file modification
     #[arg(short, long)]
     single: bool,
 
-    /// Name of temporary CSV file
+    /// Zero-based numbering for teams and players
+    #[arg(short, long)]
+    zero_based: bool,
+
+    /// Filename for temporary CSV file
     #[arg(long, default_value = "TEMP.CSV")]
     temp_file: String,
 }
@@ -64,7 +64,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let output_dir_path = match &args.output_dir {
         Some(p) => PathBuf::from(p),
         None => match &user_dir {
-            Some(ud) => ud.document_dir().unwrap().join("Hunt"),
+            Some(ud) => ud.document_dir().unwrap().join("Hunt").join("MatchData"),
             None => {
                 panic!("Could not obtain handle to Home directory")
             }
