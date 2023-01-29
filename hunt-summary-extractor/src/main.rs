@@ -1,13 +1,16 @@
 use chrono::prelude::*;
 use clap::Parser;
 use directories::UserDirs;
+use notify::RecursiveMode;
+use notify_debouncer_mini::new_debouncer;
 use quick_xml::de::from_str;
 use regex::Regex;
 use serde::Deserialize;
 use std::error::Error;
 use std::fs;
 use std::io::{BufWriter, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// Extracts Hunt: Showdown player match data from 'attributes.xml' into a CSV file
 #[derive(Parser, Debug)]
@@ -28,6 +31,10 @@ struct Args {
     /// Zero-based number for teams and players
     #[arg(short, long)]
     zero_based: bool,
+
+    /// Run continuously and watch for file changes
+    #[arg(short, long)]
+    continuous: bool,
 
     /// Name of temporary CSV file
     #[arg(long, default_value = "TEMP.CSV")]
@@ -53,11 +60,6 @@ struct Item {
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
-    let contents = fs::read_to_string(args.input).expect("Could not open file.");
-    let object: Attributes = from_str(contents.as_str())?;
-
-    let re_player_entry = Regex::new(r"MissionBagPlayer_(\d+)_(\d+)_(\w+)")?;
-
     let user_dir = UserDirs::new();
     let output_dir_path = match &args.output_dir {
         Some(p) => PathBuf::from(p),
@@ -69,7 +71,36 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
     };
 
-    let output_file_path = output_dir_path.join(&args.temp_file);
+    if args.continuous {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut debouncer = new_debouncer(Duration::from_secs(2), None, tx).unwrap();
+        debouncer
+            .watcher()
+            .watch(args.input.as_ref(), RecursiveMode::Recursive)?;
+
+        for res in rx {
+            match res {
+                Ok(_) => extract_player_data(&args, output_dir_path.as_path())?,
+                Err(e) => println!("watch error: {e:?}"),
+            }
+        }
+    } else {
+        extract_player_data(&args, output_dir_path.as_path())?;
+    }
+
+    Ok(())
+}
+
+fn extract_player_data<P: AsRef<Path>>(
+    args: &Args,
+    output_dir_path: P,
+) -> Result<(), Box<dyn Error>> {
+    let re_player_entry = Regex::new(r"MissionBagPlayer_(\d+)_(\d+)_(\w+)")?;
+
+    let contents = fs::read_to_string(&args.input).expect("Could not open file.");
+    let attr: Attributes = from_str(contents.as_str()).unwrap();
+
+    let output_file_path = PathBuf::from(output_dir_path.as_ref()).join(&args.temp_file);
 
     fs::create_dir_all(&output_dir_path).expect("Could not create output directory.");
 
@@ -91,13 +122,13 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Iterate until the match's team count is found, output the player data, then break
 
-    for item in object.items.iter() {
+    for item in attr.items.iter() {
         if item.name == "MissionBagNumTeams" {
             let num_teams: u32 = item.value.parse()?;
 
             // Filter only player data that falls within team count into new list
 
-            let player_entries: Vec<Item> = object
+            let player_entries: Vec<Item> = attr
                 .items
                 .into_iter()
                 .filter(|i| match re_player_entry.captures(i.name.as_str()) {
@@ -185,10 +216,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         None => true,
     } {
-        let timestamp = Local::now().format("%Y-%m-%d_%H-%M");
+        let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S");
         fs::rename(
             output_file_path,
-            output_dir_path.join(format!("{timestamp}.csv")),
+            output_dir_path.as_ref().join(format!("{timestamp}.csv")),
         )
         .expect("Could not rename temporary CSV file with timestamp.");
     }
