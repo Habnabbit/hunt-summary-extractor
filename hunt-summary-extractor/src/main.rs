@@ -32,9 +32,9 @@ struct Args {
     #[arg(short, long)]
     zero_based: bool,
 
-    /// Run continuously and watch for file changes
+    /// Disable continuous mode, checking only once for file modification
     #[arg(short, long)]
-    continuous: bool,
+    single: bool,
 
     /// Name of temporary CSV file
     #[arg(long, default_value = "TEMP.CSV")]
@@ -71,7 +71,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
     };
 
-    if args.continuous {
+    if !args.single {
+        println!("Watching for changes to 'attributes.xml'...");
         let (tx, rx) = std::sync::mpsc::channel();
         let mut debouncer = new_debouncer(Duration::from_secs(2), None, tx).unwrap();
         debouncer
@@ -198,6 +199,7 @@ fn extract_player_data<P: AsRef<Path>>(
                 temp_file.write_all(format!(",{}", item.value).as_bytes())?;
                 print!(",{}", item.value);
             }
+            println!();
 
             break;
         }
@@ -217,11 +219,13 @@ fn extract_player_data<P: AsRef<Path>>(
         None => true,
     } {
         let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S");
+        let final_path = output_dir_path.as_ref().join(format!("{timestamp}.csv"));
         fs::rename(
             output_file_path,
-            output_dir_path.as_ref().join(format!("{timestamp}.csv")),
+            &final_path
         )
         .expect("Could not rename temporary CSV file with timestamp.");
+        println!("New player summary saved: '{}'", final_path.to_string_lossy());
     }
 
     Ok(())
