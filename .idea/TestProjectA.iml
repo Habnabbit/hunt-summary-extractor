@@ -7,7 +7,7 @@
       <sourceFolder url="file://$MODULE_DIR$/add_one/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/adder/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/hunt-summary-extractor/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
       <excludeFolder url="file://$MODULE_DIR$/TestA/target" />
     </content>
