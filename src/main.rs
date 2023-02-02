@@ -4,8 +4,8 @@ use directories::UserDirs;
 use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
 use quick_xml::de::from_str;
-use regex::Regex;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::io::{BufWriter, Write};
@@ -57,6 +57,26 @@ struct Item {
     value: String,
 }
 
+const HEADERS: [&str; 17] = [
+    "blood_line_name",
+    "mmr",
+    "skillbased",
+    "downedbyme",
+    "killedbyme",
+    "downedbyteammate",
+    "killedbyteammate",
+    "downedme",
+    "killedme",
+    "downedteammate",
+    "killedteammate",
+    "proximitytome",
+    "proximitytoteammate",
+    "bountypickedup",
+    "bountyextracted",
+    "teamextraction",
+    "profileid",
+];
+
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
@@ -96,10 +116,8 @@ fn extract_player_data<P: AsRef<Path>>(
     args: &Args,
     output_dir_path: P,
 ) -> Result<(), Box<dyn Error>> {
-    let re_player_entry = Regex::new(r"MissionBagPlayer_(\d+)_(\d+)_(\w+)")?;
-
     let contents = fs::read_to_string(&args.input).expect("Could not open file.");
-    let attr: Attributes = from_str(contents.as_str()).unwrap();
+    let attributes: Attributes = from_str(contents.as_str()).unwrap();
 
     let output_file_path = PathBuf::from(output_dir_path.as_ref()).join(&args.temp_file);
 
@@ -121,98 +139,62 @@ fn extract_player_data<P: AsRef<Path>>(
     existing_files.sort_by_cached_key(|f| f.metadata().unwrap().modified().unwrap());
     let latest_csv = existing_files.last();
 
-    // Iterate until the match's team count is found, output the player data, then break
+    // Build map of names to values from attributes file
+    let mut attr_map = HashMap::new();
+    for item in attributes.items.iter() {
+        attr_map.insert(&item.name, &item.value);
+    }
 
-    for item in attr.items.iter() {
-        if item.name == "MissionBagNumTeams" {
-            let num_teams: u32 = item.value.parse()?;
+    // Check if attributes file has team data, and get the number of teams
+    if let Some(num_teams) = attr_map.get(&"MissionBagNumTeams".to_string()) {
+        let temp_file = fs::File::options()
+            .read(true)
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open(&output_file_path)?;
+        let mut temp_file = BufWriter::new(temp_file);
 
-            // Filter only player data that falls within team count into new list
+        // Write CSV header row
+        temp_file.write_all(format!("Team,Player,{}", HEADERS.join(",")).as_bytes())?;
 
-            let player_entries: Vec<Item> = attr
-                .items
-                .into_iter()
-                .filter(|i| match re_player_entry.captures(i.name.as_str()) {
-                    Some(c) => c.get(1).unwrap().as_str().parse::<u32>().unwrap() < num_teams,
-                    None => false,
-                })
-                .collect();
+        // Get number of players in each team
+        let mut num_players = Vec::new();
+        for team in 0..num_teams.parse::<u32>()? {
+            num_players.push(
+                attr_map
+                    .get(&format!("MissionBagTeam_{team}_numplayers"))
+                    .unwrap()
+                    .parse::<u32>()?,
+            );
+        }
 
-            let temp_file = fs::File::options()
-                .read(true)
-                .write(true)
-                .create(true)
-                .open(&output_file_path)?;
-            let mut temp_file = BufWriter::new(temp_file);
+        // Iterate over players in each team, collecting attributes that exist in HEADERS array
+        for (team, &team_size) in num_players.iter().enumerate() {
+            for player in 0..team_size {
+                let team_output = team + if args.zero_based { 0 } else { 1 };
+                let player_output = player + if args.zero_based { 0 } else { 1 };
+                temp_file.write_all(format!("\n{team_output},{player_output}").as_bytes())?;
 
-            // Output headers
+                for header in HEADERS {
+                    let value = *attr_map
+                        .get(&format!("MissionBagPlayer_{team}_{player}_{header}"))
+                        .unwrap();
 
-            temp_file.write_all(b"Team,Player")?;
-            print!("Team,Player");
-            for item in player_entries.iter() {
-                let captures = re_player_entry.captures(item.name.as_str()).unwrap();
-
-                let team = captures.get(1).unwrap().as_str().parse::<u32>()?;
-                let player = captures.get(2).unwrap().as_str().parse::<u32>()?;
-                let header = captures.get(3).unwrap();
-
-                // Break when the player changes. We only want the headers once
-                let current_player = (3 * team) + player;
-                if current_player != 0 {
-                    break;
+                    temp_file.write_all(format!(",{value}").as_bytes())?;
                 }
-
-                temp_file.write_all(format!(",{}", header.as_str()).as_bytes())?;
-                print!(",{}", captures.get(3).unwrap().as_str());
             }
-
-            // Output player data
-
-            let mut previous_player = u32::MAX;
-            let mut skip_to_team = 0;
-            for item in player_entries {
-                let captures = re_player_entry.captures(item.name.as_str()).unwrap();
-
-                let team = captures.get(1).unwrap().as_str().parse::<u32>()?;
-                let player = captures.get(2).unwrap().as_str().parse::<u32>()?;
-
-                if team < skip_to_team {
-                    continue;
-                }
-
-                // Begin a new row whenever the player changes
-                let current_player = (3 * team) + player;
-                if current_player != previous_player {
-                    previous_player = current_player;
-
-                    // Skip to next team if player slot is empty
-                    if item.value.is_empty() {
-                        skip_to_team = team + 1;
-                        continue;
-                    }
-                    let team_output = team + if args.zero_based { 0 } else { 1 };
-                    let player_output = player + if args.zero_based { 0 } else { 1 };
-                    temp_file.write_all(format!("\n{team_output},{player_output}").as_bytes())?;
-                    print!("\n{team_output},{player_output}");
-                }
-
-                temp_file.write_all(format!(",{}", item.value).as_bytes())?;
-                print!(",{}", item.value);
-            }
-            println!();
-
-            break;
         }
     }
 
     // If the existing latest CSV file matches the newly created one, or if it does not exist,
     // then rename temp file with a timestamp
+    let new_contents = fs::read_to_string(&output_file_path)
+        .expect("Could not read newly created temporary CSV file.");
     if match latest_csv {
         Some(de) => {
             let existing_contents =
                 fs::read_to_string(de.path()).expect("Could not read existing latest CSV file.");
-            let new_contents = fs::read_to_string(&output_file_path)
-                .expect("Could not read newly created temporary CSV file.");
 
             new_contents != existing_contents
         }
@@ -220,12 +202,13 @@ fn extract_player_data<P: AsRef<Path>>(
     } {
         let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S");
         let final_path = output_dir_path.as_ref().join(format!("{timestamp}.csv"));
-        fs::rename(
-            output_file_path,
-            &final_path
-        )
-        .expect("Could not rename temporary CSV file with timestamp.");
-        println!("New player summary saved: '{}'", final_path.to_string_lossy());
+        fs::rename(output_file_path, &final_path)
+            .expect("Could not rename temporary CSV file with timestamp.");
+        println!("{new_contents}");
+        println!(
+            "New player summary saved: '{}'",
+            final_path.to_string_lossy()
+        );
     }
 
     Ok(())
