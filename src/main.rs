@@ -57,19 +57,19 @@ struct Item {
     value: String,
 }
 
-const HEADERS: [&str; 17] = [
+const HEADERS: &[&str] = &[
     "blood_line_name",
     "mmr",
     "skillbased",
     "downedbyme",
     "killedbyme",
-    "downedbyteammate",
-    "killedbyteammate",
     "downedme",
     "killedme",
+    "proximitytome",
+    "downedbyteammate",
+    "killedbyteammate",
     "downedteammate",
     "killedteammate",
-    "proximitytome",
     "proximitytoteammate",
     "bountypickedup",
     "bountyextracted",
@@ -181,7 +181,12 @@ fn extract_player_data<P: AsRef<Path>>(
                         .get(&format!("MissionBagPlayer_{team}_{player}_{header}"))
                         .unwrap();
 
-                    temp_file.write_all(format!(",{value}").as_bytes())?;
+                    // Escape commas for CSV
+                    if value.contains(',') {
+                        temp_file.write_all(format!(",\"{value}\"").as_bytes())?;
+                    } else {
+                        temp_file.write_all(format!(",{value}").as_bytes())?;
+                    }
                 }
             }
         }
